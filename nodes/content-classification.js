@@ -14,10 +14,6 @@
 // SETUP REQUIRED:
 //   Paste your Anthropic API key below where it says YOUR_KEY_HERE.
 //   Get your key at: console.anthropic.com → API Keys
-//
-// The entire Claude call is wrapped in try/catch.
-// If it fails for any reason the post gets classified as 'unknown'
-// and the workflow continues — this node will never crash.
 // =============================================================
 
 const ANTHROPIC_API_KEY = 'YOUR_KEY_HERE'; // ← paste your key here
@@ -34,21 +30,7 @@ for (const item of $input.all()) {
 
   if (caption.length > 0) {
     try {
-      const response = await $helpers.httpRequest({
-        method: 'POST',
-        url: 'https://api.anthropic.com/v1/messages',
-        headers: {
-          'x-api-key': ANTHROPIC_API_KEY,
-          'anthropic-version': '2023-06-01',
-        },
-        json: true,
-        body: {
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 20,
-          messages: [
-            {
-              role: 'user',
-              content: `Classify this Instagram caption into exactly one category. Reply with only the category name — no punctuation, no explanation, nothing else.
+      const prompt = `Classify this Instagram caption into exactly one category. Reply with only the category name — no punctuation, no explanation, nothing else.
 
 Categories:
 - storytelling (personal narrative, emotional journey, story arc, relatable experience)
@@ -58,20 +40,39 @@ Categories:
 Caption:
 "${caption.substring(0, 500)}"
 
-Category:`,
-            },
-          ],
+Category:`;
+
+      // Use native fetch — available in Node.js 18+ which n8n v2 requires
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'x-api-key': ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json',
         },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 20,
+          messages: [{ role: 'user', content: prompt }],
+        }),
       });
 
-      const raw = response.content[0].text.trim().toLowerCase().replace(/[^a-z_]/g, '');
-
-      if (VALID_TYPES.includes(raw)) {
-        classifiedType = raw;
+      if (!res.ok) {
+        // Surface HTTP error code in classified_type temporarily for debugging
+        classifiedType = `api_error_${res.status}`;
+      } else {
+        const data = await res.json();
+        const raw = data.content[0].text.trim().toLowerCase().replace(/[^a-z_]/g, '');
+        if (VALID_TYPES.includes(raw)) {
+          classifiedType = raw;
+        }
       }
+
     } catch (error) {
-      // Claude call failed — default to 'unknown', do not crash
-      classifiedType = 'unknown';
+      // Surface the error message temporarily so it shows in the SMS for debugging
+      // Once working, this can be changed back to just: classifiedType = 'unknown'
+      const msg = (error.message || String(error)).substring(0, 40).replace(/\s+/g, '_');
+      classifiedType = `err_${msg}`;
     }
   }
 
