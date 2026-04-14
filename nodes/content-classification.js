@@ -40,9 +40,9 @@ for (const item of $input.all()) {
         headers: {
           'x-api-key': ANTHROPIC_API_KEY,
           'anthropic-version': '2023-06-01',
-          'content-type': 'application/json',
         },
-        body: JSON.stringify({
+        json: true,
+        body: {
           model: 'claude-haiku-4-5-20251001',
           max_tokens: 20,
           messages: [
@@ -61,7 +61,7 @@ Caption:
 Category:`,
             },
           ],
-        }),
+        },
       });
 
       const raw = response.content[0].text.trim().toLowerCase().replace(/[^a-z_]/g, '');

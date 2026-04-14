@@ -24,6 +24,20 @@ function fmt(val) {
   return safeNum(val).toLocaleString();
 }
 
+// Extract hook: caption text before the hashtag block
+function extractHook(caption) {
+  if (!caption) return '';
+  const lines = caption.split('\n');
+  const hookLines = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('#')) break; // stop at first hashtag line
+    if (trimmed.length > 0) hookLines.push(trimmed);
+  }
+  const text = hookLines.join(' ').substring(0, 100).trim();
+  return text || caption.substring(0, 100).trim(); // fallback if all lines were hashtags
+}
+
 function titleCase(str) {
   return (str || '')
     .replace(/_/g, ' ')
@@ -69,7 +83,7 @@ for (const item of $input.all()) {
   const signalLabel  = getSignalLabel(signalStrength);
   const formatLabel  = titleCase(classifiedType);
   const actionTip    = getActionTip(classifiedType);
-  const hook         = caption.substring(0, 100).trim();
+  const hook         = extractHook(caption);
   const reachPct     = (commentRate * 100).toFixed(2);
 
   const message_text =
