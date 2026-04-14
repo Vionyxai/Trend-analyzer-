@@ -65,8 +65,7 @@ Paste the full contents of `content-classification.js` into the code editor.
 - Requires `ANTHROPIC_API_KEY` in n8n environment variables
 
 ### Setup
-1. Go to n8n → Settings → Environment Variables
-2. Add: `ANTHROPIC_API_KEY` = your key from console.anthropic.com
+Open `content-classification.js` and replace `YOUR_KEY_HERE` on line 1 with your actual key from console.anthropic.com. The key stays inside the node code — no environment variables needed.
 
 ---
 

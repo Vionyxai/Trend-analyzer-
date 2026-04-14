@@ -12,13 +12,15 @@
 // Caption truncated to 500 chars to minimise cost.
 //
 // SETUP REQUIRED:
-//   In n8n → Settings → Environment Variables, add:
-//   ANTHROPIC_API_KEY = your_anthropic_api_key
+//   Paste your Anthropic API key below where it says YOUR_KEY_HERE.
+//   Get your key at: console.anthropic.com → API Keys
 //
 // The entire Claude call is wrapped in try/catch.
 // If it fails for any reason the post gets classified as 'unknown'
 // and the workflow continues — this node will never crash.
 // =============================================================
+
+const ANTHROPIC_API_KEY = 'YOUR_KEY_HERE'; // ← paste your key here
 
 const VALID_TYPES = ['storytelling', 'talking_head', 'text_over_video'];
 
@@ -36,7 +38,7 @@ for (const item of $input.all()) {
         method: 'POST',
         url: 'https://api.anthropic.com/v1/messages',
         headers: {
-          'x-api-key': $env.ANTHROPIC_API_KEY,
+          'x-api-key': ANTHROPIC_API_KEY,
           'anthropic-version': '2023-06-01',
           'content-type': 'application/json',
         },
