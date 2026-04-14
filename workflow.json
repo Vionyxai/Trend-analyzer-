@@ -1,0 +1,298 @@
+{
+  "name": "Trend Analyzer",
+  "nodes": [
+    {
+      "id": "node-1",
+      "name": "When clicking 'Execute workflow'",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "node-2",
+      "name": "Apify Live Feed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        460,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.apify.com/v2/acts/apify~instagram-scraper/runs/last/dataset/items?token=YOUR_APIFY_TOKEN&status=SUCCEEDED",
+        "options": {}
+      }
+    },
+    {
+      "id": "node-3",
+      "name": "Signal Detection",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// =============================================================\n// NODE 2: SIGNAL DETECTION\n// n8n settings: Run Once for All Items\n// =============================================================\n//\n// Scores every post from Apify and decides whether it passes.\n// Outputs ALL items — the Filter node downstream drops pass: false.\n//\n// CONFIRMED Apify fields used:\n//   videoPlayCount, likesCount, commentsCount, caption,\n//   ownerUsername, url, hashtags, timestamp\n//\n// Fields that DO NOT exist in Apify output (never read these):\n//   followerCount, platform, contentType\n//\n// FOLLOWER COUNT PROXY (Apify does not return follower count):\n//   Large accounts are filtered via three combined signals:\n//   1. MAX_LIKES     — large accounts consistently exceed 5k likes/post\n//   2. MAX_VIEWS     — large accounts always get high absolute view counts\n//   3. MIN_ENGAGEMENT_RATE — large accounts have passive audiences,\n//                            so their likes/views ratio stays low\n// =============================================================\n\n// --- Thresholds (tune these as real data flows in) -----------\nconst MIN_VIEWS           = 10000;   // floor: need some real traction\nconst MAX_VIEWS           = 250000;  // ceiling: large account proxy + already viral\nconst MIN_LIKES           = 500;     // floor: confirm real response\nconst MAX_LIKES           = 5000;    // ceiling: large account proxy\nconst MIN_COMMENT_RATE    = 0.002;   // commentsCount / videoPlayCount (tuned from 0.003)\nconst STRONG_COMMENT_RATE = 0.008;   // threshold for strong signal\nconst MIN_ENGAGEMENT_RATE = 0.08;    // likesCount / videoPlayCount (raised from 0.05)\nconst MIN_ASCII_RATIO     = 0.85;    // caption must be ≥85% ASCII (English filter)\n\n// --- Helper: English language check -------------------------\nfunction isEnglish(text) {\n  if (!text || text.length === 0) return true;\n  const chars = text.split('');\n  const asciiCount = chars.filter(c => c.charCodeAt(0) < 128).length;\n  return (asciiCount / chars.length) >= MIN_ASCII_RATIO;\n}\n\n// --- Helper: safe number ------------------------------------\nfunction num(val) {\n  return Number(val) || 0;\n}\n\n// --- Main loop ----------------------------------------------\nconst results = [];\n\nfor (const item of $input.all()) {\n  const post = item.json;\n\n  const views    = num(post.videoPlayCount);\n  const likes    = num(post.likesCount);\n  const comments = num(post.commentsCount);\n  const caption  = post.caption || '';\n\n  // 1. English filter\n  if (!isEnglish(caption)) {\n    results.push({ json: { ...post, pass: false, fail_reason: 'non_english' } });\n    continue;\n  }\n\n  // 2. Views floor\n  if (views < MIN_VIEWS) {\n    results.push({ json: { ...post, pass: false, fail_reason: 'low_views' } });\n    continue;\n  }\n\n  // 3. Views ceiling (large account proxy + already-viral filter)\n  if (views > MAX_VIEWS) {\n    results.push({ json: { ...post, pass: false, fail_reason: 'too_viral_or_large_account' } });\n    continue;\n  }\n\n  // 4. Likes ceiling (large account proxy)\n  if (likes > MAX_LIKES) {\n    results.push({ json: { ...post, pass: false, fail_reason: 'large_account' } });\n    continue;\n  }\n\n  // 5. Likes floor\n  if (likes < MIN_LIKES) {\n    results.push({ json: { ...post, pass: false, fail_reason: 'low_likes' } });\n    continue;\n  }\n\n  // 6. Comment rate\n  const commentRate = views > 0 ? comments / views : 0;\n  if (commentRate < MIN_COMMENT_RATE) {\n    results.push({ json: { ...post, pass: false, fail_reason: 'low_comment_rate' } });\n    continue;\n  }\n\n  // 7. Engagement rate (large account proxy — passive audiences fail this)\n  const engagementRate = views > 0 ? likes / views : 0;\n  if (engagementRate < MIN_ENGAGEMENT_RATE) {\n    results.push({ json: { ...post, pass: false, fail_reason: 'low_engagement' } });\n    continue;\n  }\n\n  // 8. Assign signal strength\n  let signalStrength;\n  if (commentRate >= STRONG_COMMENT_RATE && engagementRate >= 0.12) {\n    signalStrength = 'strong';\n  } else if (commentRate >= STRONG_COMMENT_RATE || engagementRate >= 0.10) {\n    signalStrength = 'moderate';\n  } else {\n    signalStrength = 'early';\n  }\n\n  results.push({\n    json: {\n      ...post,\n      pass: true,\n      signal_strength: signalStrength,\n      comment_rate: commentRate,\n      engagement_rate: engagementRate,\n    }\n  });\n}\n\nreturn results;\n"
+      }
+    },
+    {
+      "id": "node-4",
+      "name": "Signal Filter",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [
+        900,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-pass",
+              "leftValue": "={{ $json.pass }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "node-5",
+      "name": "Prepare Claude Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// =============================================================\n// NODE 4a: PREPARE CLAUDE REQUEST\n// n8n settings: Run Once for All Items\n// =============================================================\n// Runs BEFORE the Claude API HTTP Request node.\n// Adds a clean claude_prompt field to each post so the HTTP\n// Request node can reference it as a simple expression.\n// =============================================================\n\nconst results = [];\n\nfor (const item of $input.all()) {\n  const post = item.json;\n  const caption = (post.caption || '').trim();\n\n  // Strip double quotes from caption to keep the JSON body clean\n  const safeCaption = caption.substring(0, 500).replace(/\"/g, \"'\");\n\n  const claudePrompt = 'Classify this Instagram caption into one category. Reply with one word only — no punctuation, nothing else.\\n\\nOptions: storytelling, talking_head, text_over_video\\n\\nCaption: \"' + safeCaption + '\"\\n\\nCategory:';\n\n  results.push({\n    json: {\n      ...post,\n      claude_prompt: claudePrompt,\n    },\n  });\n}\n\nreturn results;\n"
+      }
+    },
+    {
+      "id": "node-6",
+      "name": "Claude API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1340,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ '{\"model\":\"claude-haiku-4-5-20251001\",\"max_tokens\":20,\"messages\":[{\"role\":\"user\",\"content\":' + JSON.stringify($json.claude_prompt) + '}]}' }}",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ASSIGN_AFTER_IMPORT",
+          "name": "Anthropic API Key"
+        }
+      }
+    },
+    {
+      "id": "node-7",
+      "name": "Extract Classification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// =============================================================\n// NODE 4b: EXTRACT CLASSIFICATION\n// n8n settings: Run Once for All Items\n// =============================================================\n//\n// Runs after the HTTP Request node that called Claude API.\n// Extracts the classification label from Claude's response and\n// merges it back with the original post data from Signal Filter.\n//\n// Workflow position: Signal Filter → HTTP Request (Claude) → THIS NODE\n// =============================================================\n\nconst VALID_TYPES = ['storytelling', 'talking_head', 'text_over_video'];\n\n// Original post data comes from the Signal Filter node\nconst originalPosts = $('Signal Filter').all();\nconst claudeResponses = $input.all();\n\nconst results = [];\n\nfor (let i = 0; i < claudeResponses.length; i++) {\n  const claudeResponse = claudeResponses[i].json;\n  const originalPost   = (originalPosts[i] || claudeResponses[i]).json;\n\n  let classifiedType = 'unknown';\n\n  try {\n    const raw = claudeResponse.content[0].text\n      .trim()\n      .toLowerCase()\n      .replace(/[^a-z_]/g, '');\n\n    if (VALID_TYPES.includes(raw)) {\n      classifiedType = raw;\n    }\n  } catch (e) {\n    classifiedType = 'unknown';\n  }\n\n  results.push({\n    json: {\n      ...originalPost,\n      classified_type: classifiedType,\n    },\n  });\n}\n\nreturn results;\n"
+      }
+    },
+    {
+      "id": "node-8",
+      "name": "Content Router",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1780,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// =============================================================\n// NODE 5: CONTENT ROUTER\n// n8n settings: Run Once for All Items\n// =============================================================\n//\n// Adds a `route` field based on classified_type and passes all\n// items through as a single output.\n//\n// NOTE: Switch node is NOT used — it would not save routing rules\n// reliably in n8n v2. This Code node is the replacement.\n// =============================================================\n\nconst ROUTE_MAP = {\n  storytelling:    'storytelling',\n  talking_head:    'talking_head',\n  text_over_video: 'text_over_video',\n};\n\nconst results = [];\n\nfor (const item of $input.all()) {\n  const post = item.json;\n  const classifiedType = post.classified_type || 'unknown';\n\n  results.push({\n    json: {\n      ...post,\n      route: ROUTE_MAP[classifiedType] || 'unknown',\n    },\n  });\n}\n\nreturn results;\n"
+      }
+    },
+    {
+      "id": "node-9",
+      "name": "SMS Builder",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// =============================================================\n// NODE 6: SMS BUILDER\n// n8n settings: Run Once for All Items\n// =============================================================\n//\n// Builds the final message_text field for every passing post.\n// Every field access is null-safe — this node will never crash\n// on missing or undefined Apify data.\n//\n// Output field: message_text\n// Twilio node expression: {{ $json.message_text }}\n//   (nothing after the closing bracket — bug #3 fix)\n//\n// Platform is hardcoded as \"Instagram\" because Apify does not\n// return a platform field (bug #7 fix).\n// =============================================================\n\n// --- Helpers ------------------------------------------------\nfunction safeNum(val) {\n  return Number(val) || 0;\n}\n\nfunction fmt(val) {\n  return safeNum(val).toLocaleString();\n}\n\n// Extract hook: caption text before the hashtag block\nfunction extractHook(caption) {\n  if (!caption) return '';\n  const lines = caption.split('\\n');\n  const hookLines = [];\n  for (const line of lines) {\n    const trimmed = line.trim();\n    if (trimmed.startsWith('#')) break; // stop at first hashtag line\n    if (trimmed.length > 0) hookLines.push(trimmed);\n  }\n  const text = hookLines.join(' ').substring(0, 100).trim();\n  return text || caption.substring(0, 100).trim(); // fallback if all lines were hashtags\n}\n\nfunction titleCase(str) {\n  return (str || '')\n    .replace(/_/g, ' ')\n    .replace(/\\b\\w/g, c => c.toUpperCase());\n}\n\n// --- Signal label -------------------------------------------\nfunction getSignalLabel(strength) {\n  if (strength === 'strong')   return '🔥 STRONG SIGNAL';\n  if (strength === 'moderate') return '📈 SIGNAL DETECTED';\n  return '👀 EARLY SIGNAL';\n}\n\n// --- Action tip per format ----------------------------------\nfunction getActionTip(classifiedType) {\n  if (classifiedType === 'storytelling') {\n    return 'Try a 3-part story arc: hook → tension → resolution. Make it personal.';\n  }\n  if (classifiedType === 'talking_head') {\n    return 'Lead with a bold claim or contrarian take in the first 2 seconds.';\n  }\n  if (classifiedType === 'text_over_video') {\n    return 'Use bold text callouts on screen — let the visuals do the talking.';\n  }\n  return 'Study the hook and pacing — identify what made this land and replicate it.';\n}\n\n// --- Main loop ----------------------------------------------\nconst results = [];\n\nfor (const item of $input.all()) {\n  const post = item.json;\n\n  const signalStrength  = post.signal_strength  || 'early';\n  const classifiedType  = post.classified_type  || 'unknown';\n  const username        = post.ownerUsername    || 'unknown';\n  const views           = safeNum(post.videoPlayCount);\n  const likes           = safeNum(post.likesCount);\n  const comments        = safeNum(post.commentsCount);\n  const caption         = post.caption          || '';\n  const commentRate     = Number(post.comment_rate) || 0;\n\n  const signalLabel  = getSignalLabel(signalStrength);\n  const formatLabel  = titleCase(classifiedType);\n  const actionTip    = getActionTip(classifiedType);\n  const hook         = extractHook(caption);\n  const reachPct     = (commentRate * 100).toFixed(2);\n\n  const message_text =\n`${signalLabel}\nFormat: ${formatLabel}\nCreator: @${username}\nPlatform: Instagram\n\nViews: ${fmt(views)}\nLikes: ${fmt(likes)}\nComments: ${fmt(comments)}\nReach: ${reachPct}% commented\n\nHook: ${hook}\n\nTip: ${actionTip}`;\n\n  results.push({\n    json: {\n      ...post,\n      message_text,\n    },\n  });\n}\n\nreturn results;\n"
+      }
+    },
+    {
+      "id": "node-10",
+      "name": "Send Alert",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        2220,
+        300
+      ],
+      "parameters": {
+        "from": "YOUR_TWILIO_FROM_NUMBER",
+        "to": "YOUR_TWILIO_TO_NUMBER",
+        "message": "={{ $json.message_text }}"
+      },
+      "credentials": {
+        "twilioApi": {
+          "id": "ASSIGN_AFTER_IMPORT",
+          "name": "Twilio account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "When clicking 'Execute workflow'": {
+      "main": [
+        [
+          {
+            "node": "Apify Live Feed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apify Live Feed": {
+      "main": [
+        [
+          {
+            "node": "Signal Detection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Signal Detection": {
+      "main": [
+        [
+          {
+            "node": "Signal Filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Signal Filter": {
+      "main": [
+        [
+          {
+            "node": "Prepare Claude Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Claude Request": {
+      "main": [
+        [
+          {
+            "node": "Claude API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude API": {
+      "main": [
+        [
+          {
+            "node": "Extract Classification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Classification": {
+      "main": [
+        [
+          {
+            "node": "Content Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Content Router": {
+      "main": [
+        [
+          {
+            "node": "SMS Builder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SMS Builder": {
+      "main": [
+        [
+          {
+            "node": "Send Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
