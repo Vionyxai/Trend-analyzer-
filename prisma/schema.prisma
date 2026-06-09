@@ -1,0 +1,43 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("POSTGRES_URL")
+}
+
+model DailyGoal {
+  id         String      @id @default(cuid())
+  date       String
+  category   Category
+  title      String
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+  completion Completion?
+
+  @@unique([date, category])
+}
+
+model Completion {
+  id            String    @id @default(cuid())
+  goalId        String    @unique
+  goal          DailyGoal @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  completedAt   DateTime  @default(now())
+  proofType     ProofType
+  proofText     String?
+  proofPhotoUrl String?
+
+  @@index([completedAt])
+}
+
+enum Category {
+  MENTAL
+  FINANCIAL
+  PHYSICAL
+}
+
+enum ProofType {
+  PHOTO
+  TEXT
+}
